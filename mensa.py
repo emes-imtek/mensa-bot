@@ -5,6 +5,7 @@ import time
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+import traceback
 
 import schedule
 from dotenv import load_dotenv
@@ -312,5 +313,5 @@ if __name__ == "__main__":
 
             time.sleep(60)
 
-    except KeyboardInterrupt:
-        logging.info("🛑 Scheduler stopped by user.")
+    except:
+        logging.info("🛑 Scheduler stopped.", traceback.format_exc())
