@@ -4,8 +4,10 @@
 git fetch --all
 git reset --hard origin/main
 
+chmod +x deploy.sh
+
 # Step 2: Build Docker image
-sudo docker build -t mensa-bot .
+sudo docker build --no-cache -t mensa-bot .
 
 # Step 3: Stop & remove any existing container
 sudo docker stop mensa-bot-container 2>/dev/null || true

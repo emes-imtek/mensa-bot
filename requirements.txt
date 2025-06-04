@@ -3,3 +3,4 @@ playwright
 pillow
 mattermostdriver
 pytz
+python-dotenv
