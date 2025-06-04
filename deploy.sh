@@ -1,7 +1,8 @@
 #!/bin/bash
 
 # Step 1: Pull latest code
-git pull
+git fetch --all
+git reset --hard origin/main
 
 # Step 2: Build Docker image
 sudo docker build -t mensa-bot .
