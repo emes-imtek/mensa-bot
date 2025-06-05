@@ -1,3 +1,4 @@
+import sys
 import json
 import logging
 import os
@@ -37,8 +38,6 @@ MARGIN_TOP = 18
 MARGIN_LEFT = 25
 
 # === LOGGING SETUP ===
-
-
 def setup_logging():
     LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
     LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
@@ -61,8 +60,6 @@ def setup_logging():
     )
 
 # === MATTERMOST UTILITIES ===
-
-
 class Mattermost:
     def __init__(self):
         load_dotenv(dotenv_path=Path(__file__).parent / "config.env")
@@ -119,8 +116,6 @@ class Mattermost:
             return None
 
 # === FILE HANDLING ===
-
-
 def save_post_id(post_id):
     """Saves the Mattermost post ID with the current date."""
     with open(POST_ID_PATH, "w") as f:
@@ -128,7 +123,6 @@ def save_post_id(post_id):
             "post_id": post_id,
             "date": datetime.now().date().isoformat()
         }, f)
-
 
 def load_post_id():
     """Returns today's post ID if it exists and is fresh."""
@@ -141,13 +135,11 @@ def load_post_id():
         pass
     return None
 
-
 def delete_post_id():
     """Removes the post ID file."""
     if os.path.exists(POST_ID_PATH):
         os.remove(POST_ID_PATH)
         logging.info("🧹 Deleted post ID after reminder.")
-
 
 def load_js_script(filename: str) -> str:
     """Reads and returns JavaScript code from a file."""
@@ -159,8 +151,6 @@ def load_js_script(filename: str) -> str:
         return ""
 
 # === PAGE PARSING LOGIC ===
-
-
 def is_menu_available(page):
     """Checks if a menu is available today."""
     visible_tab = page.query_selector(VISIBLE_TAB_SELECTOR)
@@ -169,68 +159,92 @@ def is_menu_available(page):
     return None
 
 # === SCREENSHOT AND UPLOAD ===
+def capture_and_send_screenshot(max_retries=5, delay_seconds=2):
+    """Attempts to capture and upload a screenshot of the menu with retries."""
+    logging.info("📸 Starting screenshot and upload process...")
 
+    for attempt in range(1, max_retries + 1):
+        logging.info(f"🔁 Attempt {attempt}/{max_retries}...")
 
-def capture_and_send_screenshot():
-    """Captures and uploads the menu screenshot. Returns Mattermost file ID."""
-    logging.info("📸 Starting screenshot and upload...")
+        try:
+            with sync_playwright() as p:
+                browser = None
+                try:
+                    browser = p.chromium.launch(headless=True)
+                    page = browser.new_page(viewport={"width": 1279, "height": 2000})
 
-    try:
-        with sync_playwright() as p:
-            try:
-                browser = p.chromium.launch(headless=True)
-                page = browser.new_page(
-                    viewport={"width": 1279, "height": 2000})
-                page.goto(MENU_URL)
-                page.wait_for_timeout(3000)
+                    logging.info("🌐 Navigating to the menu page...")
+                    page.goto(MENU_URL, timeout=15000, wait_until="load")
 
-                visible_tab = is_menu_available(page)
-                if not visible_tab:
-                    logging.warning("⚠️  No menu available today.")
-                    return None
+                    # Wait until the menu tab is rendered and not hidden
+                    logging.info("⏳ Waiting for visible menu tab...")
+                    page.wait_for_selector(VISIBLE_TAB_SELECTOR, timeout=8000)
 
-                # Prepare page DOM
-                if not JS_SCRIPT:
-                    logging.warning(
-                        "⚠️ JavaScript script is empty. Skipping evaluation.")
-                else:
-                    page.evaluate(JS_SCRIPT)
+                    visible_tab = is_menu_available(page)
+                    if not visible_tab:
+                        logging.warning("⚠️ No menu tab found or empty. Saving HTML for debugging.")
+                        html_path = f"failed_capture_dump_attempt{attempt}.html"
+                        with open(html_path, "w", encoding="utf-8") as f:
+                            f.write(page.content())
+                        logging.info(f"📝 HTML saved to {html_path}")
+                        continue
 
-                # Full screenshot
-                page.screenshot(path=SCREENSHOT_FULL, full_page=True)
+                    if not JS_SCRIPT:
+                        logging.warning("⚠️ JavaScript script is empty. Skipping evaluation.")
+                    else:
+                        page.evaluate(JS_SCRIPT)
 
-                box = visible_tab.bounding_box()
-                if not box:
-                    logging.error("❌ Failed to get bounding box.")
-                    return None
+                    # Full page screenshot before cropping
+                    page.screenshot(path=SCREENSHOT_FULL, full_page=True)
 
-                x = max(int(box["x"]) - MARGIN_LEFT, 0)
-                y = max(int(box["y"]) - MARGIN_TOP, 0)
-                width = int(box["width"]) + MARGIN_LEFT * 2
-                height = int(box["height"]) + MARGIN_TOP * 2
+                    box = visible_tab.bounding_box()
+                    if not box:
+                        logging.error("❌ Failed to get bounding box.")
+                        continue
 
-                image = Image.open(SCREENSHOT_FULL)
-                cropped = image.crop((x, y, x + width, y + height))
-                cropped.save(SCREENSHOT_CROPPED)
-            finally:
-                browser.close()
+                    x = max(int(box["x"]) - MARGIN_LEFT, 0)
+                    y = max(int(box["y"]) - MARGIN_TOP, 0)
+                    width = int(box["width"]) + MARGIN_LEFT * 2
+                    height = int(box["height"]) + MARGIN_TOP * 2
 
-        file_id = mm.upload_file(SCREENSHOT_CROPPED)
-        logging.info("✅ Screenshot uploaded.")
-        return file_id
+                    image = Image.open(SCREENSHOT_FULL)
+                    cropped = image.crop((x, y, x + width, y + height))
+                    cropped.save(SCREENSHOT_CROPPED)
 
-    except Exception:
-        logging.exception("❌ Unexpected error during screenshot process.")
-        mm.post(
-            "⚠️ Heute konnte leider kein Screenshot des Speiseplans erstellt werden.")
-        return None
+                    file_id = mm.upload_file(SCREENSHOT_CROPPED)
+                    if file_id:
+                        logging.info("✅ Screenshot uploaded successfully.")
+                        return file_id
+                    else:
+                        logging.warning("⚠️ Upload failed, will retry...")
+
+                finally:
+                    if browser:
+                        browser.close()
+
+        except Exception as e:
+            logging.warning(f"⚠️ Exception on attempt {attempt}: {e}")
+            logging.debug(traceback.format_exc())
+
+            # Save page HTML if available
+            if 'page' in locals():
+                html_path = f"failed_capture_exception_attempt{attempt}.html"
+                try:
+                    with open(html_path, "w", encoding="utf-8") as f:
+                        f.write(page.content())
+                    logging.info(f"📝 HTML saved to {html_path} after exception.")
+                except Exception as html_err:
+                    logging.warning(f"⚠️ Could not save HTML: {html_err}")
+
+        time.sleep(delay_seconds)
+
+    logging.error("❌ All screenshot attempts failed.")
+    mm.post("⚠️ Heute konnte leider kein Screenshot des Speiseplans erstellt werden.")
+    return None
 
 # === DAILY POSTING TASKS ===
-
-
 def is_weekend():
     return datetime.today().weekday() >= 5  # Saturday = 5, Sunday = 6
-
 
 def post_morning_message():
     if is_weekend():
@@ -247,7 +261,6 @@ def post_morning_message():
     if post:
         save_post_id(post["id"])
         logging.info("✅ Morning menu post successful.")
-
 
 def post_reminder_message():
     if is_weekend():
@@ -270,7 +283,6 @@ def post_reminder_message():
     else:
         logging.info("ℹ️ No valid post ID for today — skipping reminder.")
 
-
 # === SCHEDULER ===
 if __name__ == "__main__":
     # === Initialize Logging ===
@@ -282,9 +294,8 @@ if __name__ == "__main__":
     # === Load JavaScript once ===
     JS_SCRIPT = load_js_script("javascript.js")
     if not JS_SCRIPT:
-        logging.critical(
-            "❌ Required JavaScript file is missing or empty. Exiting.")
-        exit(1)
+        logging.critical("❌ Required JavaScript file is missing or empty. Exiting.")
+        sys.exit(1)
 
     # === Scheduler Setup ===
     logging.info("📅 Starting Mensa bot scheduler...")
@@ -294,13 +305,14 @@ if __name__ == "__main__":
 
     for job in schedule.jobs:
         logging.info(
-            f"⏰ Scheduled: {job.job_func.__name__} at {job.at_time.strftime('%H:%M')} {TIMEZONE}")
+            f"⏰ Scheduled: {job.job_func.__name__} at {job.at_time.strftime('%H:%M')} {TIMEZONE}"
+        )
 
     logging.info(f"📝 Logging to: {os.path.abspath(LOG_PATH)}")
     logging.info("🚀 Scheduler is now running. Press Ctrl+C to stop.")
 
     try:
-        last_logged_next_time = None  # <-- track last time we logged sleep time
+        last_logged_next_time = None
 
         while True:
             schedule.run_pending()
@@ -313,5 +325,10 @@ if __name__ == "__main__":
 
             time.sleep(60)
 
-    except:
-        logging.info("🛑 Scheduler stopped.", traceback.format_exc())
+    except KeyboardInterrupt:
+        logging.info("🛑 Scheduler stopped. (Ctrl+C)")
+        sys.exit(0)
+
+    except Exception:
+        logging.exception("❌ Unexpected error caused the scheduler to stop.")
+        sys.exit(1)
