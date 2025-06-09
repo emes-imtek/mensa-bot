@@ -152,11 +152,16 @@ def load_js_script(filename: str) -> str:
 
 # === PAGE PARSING LOGIC ===
 def is_menu_available(page):
-    """Checks if a menu is available today."""
+    """Checks if a menu is available today, or explicitly states no service."""
     visible_tab = page.query_selector(VISIBLE_TAB_SELECTOR)
-    if visible_tab and "heute keine essensausgabe" not in visible_tab.inner_text().lower():
-        return visible_tab
-    return None
+    if not visible_tab:
+        return None  # Selector not found!
+
+    inner_text = visible_tab.inner_text().lower()
+    if "heute keine essensausgabe" in inner_text:
+        return "no_service"
+
+    return visible_tab  # menu found
 
 # === SCREENSHOT AND UPLOAD ===
 def capture_and_send_screenshot(max_retries=5, delay_seconds=2):
@@ -181,9 +186,15 @@ def capture_and_send_screenshot(max_retries=5, delay_seconds=2):
                     page.wait_for_selector(VISIBLE_TAB_SELECTOR, timeout=8000)
 
                     visible_tab = is_menu_available(page)
+
+                    if visible_tab == "no_service":
+                        logging.info("ℹ️ 'Heute keine Essensausgabe' detected. Skipping screenshot and post.")
+                        return None
+
                     if not visible_tab:
-                        logging.warning("⚠️ No menu tab found or empty. Saving HTML for debugging.")
+                        logging.warning("⚠️ No visible menu tab found. Saving HTML for debugging.")
                         html_path = f"failed_capture_dump_attempt{attempt}.html"
+
                         with open(html_path, "w", encoding="utf-8") as f:
                             f.write(page.content())
                         logging.info(f"📝 HTML saved to {html_path}")
