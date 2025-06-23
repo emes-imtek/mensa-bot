@@ -14,4 +14,4 @@ sudo docker stop mensa-bot-container 2>/dev/null || true
 sudo docker rm mensa-bot-container 2>/dev/null || true
 
 # Step 4: Run container in background (detached)
-sudo docker run -d --name mensa-bot-container mensa-bot
+sudo docker run -d --restart always --name mensa-bot-container mensa-bot
